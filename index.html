@@ -412,13 +412,15 @@
         };
 
         const ENEMY_VISUALS = {
-            NORMAL: "👾", // Alien Monster
-            FAST: "🦇",   // Bat
-            TANK: "🐗",   // Boar
-            BOSS: "🐉",   // Dragon
-            SHOOTER: "🦂", // Scorpion
-            FLYING: "🦅", // Eagle
-            BOMBER: "🕷️"  // Spider
+            NORMAL: "👾", 
+            FAST: "🦇",   
+            TANK: "🐗",   
+            BOSS: "🐉",   
+            SHOOTER: "🦂", 
+            FLYING: "🦅", 
+            BOMBER: "🕷️",
+            GUARD_MELEE: "🛡️", // Shield Guard
+            GUARD_RANGE: "🏹"  // Archer Guard
         };
 
         const EVENT_VISUALS = {
@@ -526,8 +528,8 @@
             scene: null, camera: null, renderer: null, controls: null,
             raycaster: new THREE.Raycaster(), mouse: new THREE.Vector2(),
             
-            // Map
-            gridW: 20, gridH: 15,
+            // Map (Expanded Size)
+            gridW: 26, gridH: 20,
             grid: [],
             paths: [],
             baseObj: null,
@@ -536,6 +538,7 @@
             enemies: [],
             towers: [],
             projectiles: [],
+            enemyProjectiles: [], // Bullets from enemies
             particles: [],
             farms: [],
             animals: [],
@@ -576,10 +579,10 @@
                 const container = document.getElementById('game-container');
                 this.scene = new THREE.Scene();
                 this.scene.background = new THREE.Color(0x87ceeb);
-                this.scene.fog = new THREE.Fog(0x87ceeb, 50, 300);
+                this.scene.fog = new THREE.Fog(0x87ceeb, 50, 400); // Increased fog distance
 
                 this.camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 1, 1000);
-                this.camera.position.set(0, 250, 180);
+                this.camera.position.set(0, 300, 220); // Higher camera for larger map
 
                 this.renderer = new THREE.WebGLRenderer({ antialias: true });
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -600,10 +603,10 @@
                 this.sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
                 this.sunLight.position.set(100, 200, 100);
                 this.sunLight.castShadow = true;
-                this.sunLight.shadow.camera.left = -150;
-                this.sunLight.shadow.camera.right = 150;
-                this.sunLight.shadow.camera.top = 150;
-                this.sunLight.shadow.camera.bottom = -150;
+                this.sunLight.shadow.camera.left = -200;
+                this.sunLight.shadow.camera.right = 200;
+                this.sunLight.shadow.camera.top = 200;
+                this.sunLight.shadow.camera.bottom = -200;
                 this.scene.add(this.sunLight);
 
                 // Build Preview
@@ -632,6 +635,8 @@
                 this.towers = [];
                 this.enemies.forEach(e => this.scene.remove(e.mesh));
                 this.enemies = [];
+                this.enemyProjectiles.forEach(p => this.scene.remove(p.mesh));
+                this.enemyProjectiles = [];
                 this.farms.forEach(f => this.scene.remove(f.mesh));
                 this.farms = [];
                 this.animals.forEach(a => {
@@ -837,7 +842,12 @@
                 const enemyCount = 5 + this.level + this.wave * 2;
                 
                 if(this.wave % 2 === 0) {
+                    // Boss Wave with Guards
                     this.spawnQueue.push({type: 'BOSS', pathIdx: 0});
+                    this.spawnQueue.push({type: 'GUARD_MELEE', pathIdx: 0});
+                    this.spawnQueue.push({type: 'GUARD_MELEE', pathIdx: 0});
+                    this.spawnQueue.push({type: 'GUARD_RANGE', pathIdx: 0});
+                    this.spawnQueue.push({type: 'GUARD_RANGE', pathIdx: 0});
                 }
                 
                 for(let i=0; i<enemyCount; i++) {
@@ -866,12 +876,41 @@
                 let speed = 0.1;
                 let scale = 15;
                 let emoji = ENEMY_VISUALS.NORMAL;
+                let isGuard = false;
+                let attackType = null; // 'MELEE' or 'RANGE'
+                let attackRange = 0;
+                let attackDmg = 5;
 
                 if (data.type === 'FAST') { speed = 0.2; hp *= 0.6; emoji = ENEMY_VISUALS.FAST; }
                 if (data.type === 'TANK') { speed = 0.05; hp *= 3; scale = 20; emoji = ENEMY_VISUALS.TANK; }
-                if (data.type === 'BOSS') { speed = 0.04; hp *= 20; scale = 35; emoji = ENEMY_VISUALS.BOSS; }
+                if (data.type === 'BOSS') { 
+                    speed = 0.04; 
+                    hp *= 50; // 50x HP
+                    scale = 35; 
+                    emoji = ENEMY_VISUALS.BOSS; 
+                    attackType = 'MELEE'; attackRange = 3; attackDmg = 50;
+                }
+                if (data.type === 'GUARD_MELEE') {
+                    speed = 0.07;
+                    hp *= 10; // High Defense/HP
+                    scale = 20;
+                    emoji = ENEMY_VISUALS.GUARD_MELEE;
+                    isGuard = true;
+                    attackType = 'MELEE'; attackRange = 2; attackDmg = 20;
+                }
+                if (data.type === 'GUARD_RANGE') {
+                    speed = 0.07;
+                    hp *= 5;
+                    scale = 20;
+                    emoji = ENEMY_VISUALS.GUARD_RANGE;
+                    isGuard = true;
+                    attackType = 'RANGE'; attackRange = 8; attackDmg = 10;
+                }
 
                 const mesh = getEmojiSprite(emoji, scale);
+                // Randomize position slightly to avoid stacking perfectly
+                pos.x += (Math.random() - 0.5) * 5;
+                pos.z += (Math.random() - 0.5) * 5;
                 mesh.position.copy(pos);
                 
                 this.scene.add(mesh);
@@ -879,7 +918,9 @@
                     mesh, path, pathIndex: 0, 
                     hp, maxHp: hp, speed, 
                     type: data.type,
-                    frozen: 0
+                    frozen: 0,
+                    attackType, attackRange, attackDmg,
+                    attackCooldown: 0
                 });
             },
 
@@ -928,6 +969,55 @@
                 for (let i = this.enemies.length - 1; i >= 0; i--) {
                     const e = this.enemies[i];
                     
+                    // Attack Logic (Guards & Boss)
+                    if (e.attackType && e.attackCooldown <= 0) {
+                        let target = null;
+                        let minDist = e.attackRange * TILE_SIZE;
+                        
+                        // Check Animals
+                        this.animals.forEach(a => {
+                            const d = e.mesh.position.distanceTo(a.mesh.position);
+                            if (d < minDist) { minDist = d; target = {obj: a, type: 'animal'}; }
+                        });
+                        // Check Towers
+                        this.towers.forEach(t => {
+                            const d = e.mesh.position.distanceTo(t.mesh.position);
+                            if (d < minDist) { minDist = d; target = {obj: t, type: 'tower'}; }
+                        });
+
+                        if (target) {
+                            e.attackCooldown = 60; // 1 sec cooldown
+                            if(e.attackType === 'RANGE') {
+                                // Fire Projectile
+                                this.fireEnemyProjectile(e, target.obj.mesh);
+                            } else {
+                                // Melee Hit
+                                AudioSys.error(); // hit sound
+                                this.createParticle(target.obj.mesh.position, 0xff0000);
+                                if(target.type === 'animal') {
+                                    target.obj.hp -= e.attackDmg;
+                                    if(target.obj.hp <= 0) {
+                                        this.scene.remove(target.obj.mesh);
+                                        this.scene.remove(target.obj.label);
+                                        this.animals = this.animals.filter(a => a !== target.obj);
+                                        this.checkGameOver();
+                                    }
+                                } else {
+                                    target.obj.hp -= e.attackDmg;
+                                    if(target.obj.hp <= 0) {
+                                        this.scene.remove(target.obj.mesh);
+                                        target.obj.cell.content = null;
+                                        this.towers = this.towers.filter(t => t !== target.obj);
+                                        document.getElementById('warning-msg').style.opacity = 1;
+                                        setTimeout(() => document.getElementById('warning-msg').style.opacity = 0, 2000);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if(e.attackCooldown > 0) e.attackCooldown--;
+
+                    // Move Logic
                     const targetNode = e.path[e.pathIndex + 1];
                     if (targetNode) {
                         const targetPos = new THREE.Vector3((targetNode.x - this.gridW/2)*TILE_SIZE, 6, (targetNode.z - this.gridH/2)*TILE_SIZE);
@@ -957,6 +1047,7 @@
                 this.animals.forEach(a => {
                     const yOffset = Math.sin(this.time * 3 + a.floatOffset) * 0.5;
                     a.mesh.position.y = 5 + yOffset;
+                    if(a.label) a.label.position.y = 12 + yOffset;
                 });
 
                 // Towers
@@ -983,7 +1074,7 @@
                     }
                 });
 
-                // Projectiles
+                // Player Projectiles
                 for(let i=this.projectiles.length-1; i>=0; i--) {
                     const p = this.projectiles[i];
                     const dir = new THREE.Vector3().subVectors(p.target.mesh.position, p.mesh.position).normalize();
@@ -1009,6 +1100,21 @@
                         if (p.target.hp <= 0 && this.enemies.includes(p.target)) {
                             this.killEnemy(p.target);
                         }
+                    }
+                }
+
+                // Enemy Projectiles
+                for(let i=this.enemyProjectiles.length-1; i>=0; i--) {
+                    const p = this.enemyProjectiles[i];
+                    const dir = new THREE.Vector3().subVectors(p.targetPos, p.mesh.position).normalize();
+                    p.mesh.position.add(dir.multiplyScalar(1.5));
+                    
+                    if (p.mesh.position.distanceTo(p.targetPos) < 2) {
+                        this.createParticle(p.mesh.position, 0xff0000);
+                        this.scene.remove(p.mesh);
+                        this.enemyProjectiles.splice(i, 1);
+                        // Damage logic is handled on impact or simplified here
+                        // Since targets might move, simple projectile logic often just hits where target was
                     }
                 }
 
@@ -1197,6 +1303,20 @@
                 this.uiUpdate();
             },
 
+            fireEnemyProjectile: function(enemy, targetMesh) {
+                const geo = new THREE.SphereGeometry(0.8);
+                const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.copy(enemy.mesh.position);
+                this.scene.add(mesh);
+                
+                // Store bullet with target position snapshot (simple)
+                this.enemyProjectiles.push({
+                    mesh, 
+                    targetPos: targetMesh.position.clone(),
+                });
+            },
+
             killEnemy: function(e) {
                 const idx = this.enemies.indexOf(e);
                 if(idx > -1) {
@@ -1225,7 +1345,7 @@
                 let sprite, x, z;
                 
                 if (type === 'SUPPLY') {
-                    sprite = getEmojiSprite(EVENT_VISUALS.SUPPLY, 20);
+                    sprite = getEmojiSprite(EVENT_VISUALS.SUPPLY, 12); // Smaller Size (12)
                     x = (Math.random() * this.gridW - this.gridW/2) * TILE_SIZE;
                     z = (Math.random() * this.gridH - this.gridH/2) * TILE_SIZE;
                     sprite.position.set(x, 50, z);
@@ -1590,7 +1710,7 @@
 
             centerCamera: function() {
                 this.controls.target.set(0, 0, 0);
-                this.camera.position.set(0, 250, 180);
+                this.camera.position.set(0, 300, 220);
             },
 
             createParticle: function(pos, color) {
