@@ -426,7 +426,9 @@
             LUMBERJACK: "🪓",
             THIEF: "🥷",
             SUPPLY: "🎁",
-            SPEED_THIEF: "👺"
+            SPEED_THIEF: "👺",
+            TREE: "🌲",
+            WOOD: "🪵"
         };
 
         // Texture Cache to avoid recreating canvases
@@ -727,9 +729,19 @@
                         
                         this.grid[x][z] = { type: type, mesh: mesh, content: null };
 
-                        if (type === 'GRASS' && Math.random() < 0.05) {
-                            this.createStreetLight(mesh.position.x, mesh.position.z);
-                            this.grid[x][z].content = 'decoration';
+                        if (type === 'GRASS') {
+                            const rand = Math.random();
+                            if (rand < 0.03) {
+                                // Streetlight
+                                this.createStreetLight(mesh.position.x, mesh.position.z);
+                                this.grid[x][z].content = 'decoration';
+                            } else if (rand < 0.08) {
+                                // Tree
+                                const treeSprite = getEmojiSprite(EVENT_VISUALS.TREE, 20);
+                                treeSprite.position.set(mesh.position.x, 10, mesh.position.z);
+                                this.scene.add(treeSprite);
+                                this.grid[x][z].content = { type: 'tree', mesh: treeSprite };
+                            }
                         }
                     }
                 }
@@ -907,8 +919,10 @@
                     }
                 }
 
-                if (Math.random() < 0.001) this.spawnEvent('SUPPLY');
-                if (Math.random() < 0.002) this.spawnEvent('THIEF');
+                // Increase spawn rates for demo
+                if (Math.random() < 0.003) this.spawnEvent('SUPPLY');
+                if (Math.random() < 0.003) this.spawnEvent('WORM');
+                if (Math.random() < 0.003) this.spawnEvent('LUMBERJACK');
 
                 // Enemies
                 for (let i = this.enemies.length - 1; i >= 0; i--) {
@@ -926,8 +940,6 @@
 
                         e.mesh.position.add(dir.multiplyScalar(moveSpeed * TILE_SIZE * 0.5));
                         
-                        // Sprites always face camera, no lookAt needed for the mesh itself
-
                         if (dist < 1) {
                             e.pathIndex++;
                         }
@@ -964,7 +976,6 @@
 
                         if (target) {
                             t.cooldown = t.rate;
-                            // For sprites we don't rotate head
                             this.fireProjectile(t, target);
                             if(t.type === 'laser') AudioSys.laser();
                             else AudioSys.shoot();
@@ -1005,11 +1016,9 @@
                 this.farms.forEach(f => {
                     if (f.stage < 100) {
                         f.stage += 100 / f.data.growTime;
-                        // Initial small seed
                         if(f.stage < 50 && f.currentIcon !== 'SEED') {
                            // Keep seed
                         } else if (f.stage >= 100 && f.currentIcon !== 'MATURE') {
-                           // Switch sprite
                            this.scene.remove(f.mesh);
                            const newSprite = getEmojiSprite(f.data.sprite, 15);
                            newSprite.position.copy(f.mesh.position);
@@ -1027,14 +1036,139 @@
                     }
                 });
 
-                // Events
+                // Events & NPCs
                 for(let i=this.events.length-1; i>=0; i--) {
                     const ev = this.events[i];
+                    
+                    // 1. Supply Drops
                     if(ev.type === 'SUPPLY') {
                         if(ev.mesh.position.y > 6) ev.mesh.position.y -= 0.5;
+                        ev.mesh.rotation.z = Math.sin(this.time*5) * 0.1;
                     }
+
+                    // 2. Worms Logic
+                    if(ev.type === 'WORM') {
+                        if(!ev.target) {
+                            // Find random farm
+                            if(this.farms.length > 0) {
+                                ev.target = this.farms[Math.floor(Math.random() * this.farms.length)];
+                            }
+                        } else {
+                             const dist = ev.mesh.position.distanceTo(ev.target.mesh.position);
+                             if(dist > 2) {
+                                 const dir = new THREE.Vector3().subVectors(ev.target.mesh.position, ev.mesh.position).normalize();
+                                 ev.mesh.position.add(dir.multiplyScalar(0.1));
+                             } else {
+                                 // Eating
+                                 ev.timer = (ev.timer || 0) + 1;
+                                 if(ev.timer % 10 === 0) ev.mesh.scale.multiplyScalar(1.1); // Pulse
+                                 if(ev.timer > 60) {
+                                     // Eat!
+                                     this.showFloatText(ev.mesh.position, "被吃了!", "#ff0000");
+                                     AudioSys.error();
+                                     // Remove farm
+                                     this.scene.remove(ev.target.mesh);
+                                     ev.target.cell.content = null;
+                                     this.farms = this.farms.filter(f => f !== ev.target);
+                                     // Remove worm
+                                     this.scene.remove(ev.mesh);
+                                     this.events.splice(i, 1);
+                                     continue;
+                                 }
+                             }
+                             // If farm destroyed by player?
+                             if(!this.farms.includes(ev.target)) ev.target = null;
+                        }
+                    }
+
+                    // 3. Lumberjack Logic
+                    if(ev.type === 'LUMBERJACK') {
+                        if(!ev.target) {
+                             // Find closest tree
+                             let minDist = Infinity;
+                             let closest = null;
+                             this.grid.flat().forEach(cell => {
+                                 if(cell.content && cell.content.type === 'tree') {
+                                     const d = cell.mesh.position.distanceTo(ev.mesh.position);
+                                     if(d < minDist) { minDist = d; closest = cell; }
+                                 }
+                             });
+                             ev.target = closest;
+                        } else {
+                            const treePos = new THREE.Vector3(ev.target.mesh.position.x, 6, ev.target.mesh.position.z);
+                            const dist = ev.mesh.position.distanceTo(treePos);
+                            if(dist > 2) {
+                                const dir = new THREE.Vector3().subVectors(treePos, ev.mesh.position).normalize();
+                                ev.mesh.position.add(dir.multiplyScalar(0.15));
+                            } else {
+                                // Chopping
+                                ev.timer = (ev.timer || 0) + 1;
+                                ev.mesh.position.x += Math.sin(ev.timer) * 0.1; // Shake
+                                if(ev.timer > 120) {
+                                    // Chop done
+                                    AudioSys.build();
+                                    // Remove Tree
+                                    this.scene.remove(ev.target.content.mesh);
+                                    const woodPos = ev.target.mesh.position.clone();
+                                    ev.target.content = null;
+                                    
+                                    // Spawn Wood Pile
+                                    const woodSprite = getEmojiSprite(EVENT_VISUALS.WOOD, 15);
+                                    woodSprite.position.set(woodPos.x, 6, woodPos.z);
+                                    this.scene.add(woodSprite);
+                                    this.events.push({type: 'WOOD_PILE', mesh: woodSprite, value: 300});
+                                    
+                                    // Spawn Thief
+                                    this.spawnEvent('THIEF');
+
+                                    // Remove Jack
+                                    this.scene.remove(ev.mesh);
+                                    this.events.splice(i, 1);
+                                    continue;
+                                }
+                            }
+                             if(ev.target.content === null) ev.target = null; // Tree gone
+                        }
+                    }
+
+                    // 4. Thief Logic
                     if(ev.type === 'THIEF') {
-                        ev.mesh.position.x += Math.sin(this.time) * 0.2;
+                        if(!ev.target) {
+                            // Find valuable (Supply or Wood)
+                            let minDist = Infinity;
+                            let closest = null;
+                            this.events.forEach(e => {
+                                if(e.type === 'SUPPLY' || e.type === 'WOOD_PILE') {
+                                    const d = e.mesh.position.distanceTo(ev.mesh.position);
+                                    if(d < minDist) { minDist = d; closest = e; }
+                                }
+                            });
+                            ev.target = closest;
+                        } else {
+                            const dist = ev.mesh.position.distanceTo(ev.target.mesh.position);
+                            if(dist > 2) {
+                                const dir = new THREE.Vector3().subVectors(ev.target.mesh.position, ev.mesh.position).normalize();
+                                ev.mesh.position.add(dir.multiplyScalar(0.2)); // Fast
+                            } else {
+                                // Stealing
+                                ev.timer = (ev.timer || 0) + 1;
+                                if(ev.timer > 60) {
+                                    this.showFloatText(ev.mesh.position, "被偷了!", "#ff5252");
+                                    AudioSys.error();
+                                    
+                                    // Remove Item
+                                    this.scene.remove(ev.target.mesh);
+                                    const tidx = this.events.indexOf(ev.target);
+                                    if(tidx > -1) this.events.splice(tidx, 1);
+                                    
+                                    // Remove Thief
+                                    this.scene.remove(ev.mesh);
+                                    this.events.splice(i, 1);
+                                    continue;
+                                }
+                            }
+                            if(!this.events.includes(ev.target)) ev.target = null;
+                        }
                     }
                 }
 
@@ -1088,20 +1222,49 @@
             },
 
             spawnEvent: function(type) {
+                let sprite, x, z;
+                
                 if (type === 'SUPPLY') {
-                    const sprite = getEmojiSprite(EVENT_VISUALS.SUPPLY, 20);
-                    const x = (Math.random() * this.gridW - this.gridW/2) * TILE_SIZE;
-                    const z = (Math.random() * this.gridH - this.gridH/2) * TILE_SIZE;
+                    sprite = getEmojiSprite(EVENT_VISUALS.SUPPLY, 20);
+                    x = (Math.random() * this.gridW - this.gridW/2) * TILE_SIZE;
+                    z = (Math.random() * this.gridH - this.gridH/2) * TILE_SIZE;
                     sprite.position.set(x, 50, z);
                     this.scene.add(sprite);
                     this.events.push({type: 'SUPPLY', mesh: sprite});
                     AudioSys.build();
-                } else if (type === 'THIEF') {
-                     const sprite = getEmojiSprite(EVENT_VISUALS.THIEF, 15);
-                     // Just spawn near center for demo
-                     sprite.position.set(0, 6, 0);
-                     this.scene.add(sprite);
-                     this.events.push({type: 'THIEF', mesh: sprite});
+                } 
+                else if (type === 'WORM') {
+                    sprite = getEmojiSprite(EVENT_VISUALS.WORM, 12);
+                    // Spawn on random grass
+                    let gx = Math.floor(Math.random() * this.gridW);
+                    let gz = Math.floor(Math.random() * this.gridH);
+                    x = (gx - this.gridW/2) * TILE_SIZE;
+                    z = (gz - this.gridH/2) * TILE_SIZE;
+                    sprite.position.set(x, 6, z);
+                    this.scene.add(sprite);
+                    this.events.push({type: 'WORM', mesh: sprite, timer: 0});
+                }
+                else if (type === 'LUMBERJACK') {
+                    sprite = getEmojiSprite(EVENT_VISUALS.LUMBERJACK, 15);
+                    x = (Math.random() * this.gridW - this.gridW/2) * TILE_SIZE;
+                    z = (Math.random() * this.gridH - this.gridH/2) * TILE_SIZE;
+                    sprite.position.set(x, 6, z);
+                    this.scene.add(sprite);
+                    this.events.push({type: 'LUMBERJACK', mesh: sprite, timer: 0});
+                }
+                else if (type === 'THIEF') {
+                    sprite = getEmojiSprite(EVENT_VISUALS.THIEF, 15);
+                    // Spawn at random edge
+                    if(Math.random() < 0.5) {
+                        x = (Math.random() < 0.5 ? -1 : 1) * (this.gridW/2 * TILE_SIZE + 10);
+                        z = (Math.random() - 0.5) * this.gridH * TILE_SIZE;
+                    } else {
+                        x = (Math.random() - 0.5) * this.gridW * TILE_SIZE;
+                        z = (Math.random() < 0.5 ? -1 : 1) * (this.gridH/2 * TILE_SIZE + 10);
+                    }
+                    sprite.position.set(x, 6, z);
+                    this.scene.add(sprite);
+                    this.events.push({type: 'THIEF', mesh: sprite, timer: 0});
                 }
             },
 
@@ -1131,18 +1294,35 @@
 
                 this.raycaster.setFromCamera(this.mouse, this.camera);
                 
+                // Check Events (Supply, Wood, Worms, Thief)
                 const eventIntersects = this.raycaster.intersectObjects(this.events.map(e=>e.mesh));
                 if(eventIntersects.length > 0) {
                     const hit = eventIntersects[0].object;
                     const evtIndex = this.events.findIndex(e => e.mesh === hit);
                     if(evtIndex > -1) {
                         const evt = this.events[evtIndex];
+                        
                         if(evt.type === 'SUPPLY') {
                             this.money += 500;
                             this.showFloatText(hit.position, "+$500!", "#00ff00");
                             this.scene.remove(hit);
                             this.events.splice(evtIndex, 1);
                             AudioSys.harvest();
+                        } 
+                        else if (evt.type === 'WOOD_PILE') {
+                            this.money += evt.value || 300;
+                            this.showFloatText(hit.position, "+$300!", "#00ff00");
+                            this.scene.remove(hit);
+                            this.events.splice(evtIndex, 1);
+                            AudioSys.harvest();
+                        }
+                        else if (evt.type === 'WORM' || evt.type === 'THIEF') {
+                            this.money += 50;
+                            this.showFloatText(hit.position, "Gotcha! +$50", "#ffff00");
+                            this.createParticle(hit.position, 0xff0000);
+                            this.scene.remove(hit);
+                            this.events.splice(evtIndex, 1);
+                            AudioSys.shoot();
                         }
                     }
                     return;
